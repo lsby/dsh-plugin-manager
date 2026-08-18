@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DSH 插件管理器</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c2230;
+    --border: #2a3140;
+    --border-strong: #3a4356;
+    --text: #e6e8ec;
+    --text-dim: #9aa3b2;
+    --text-faint: #6b7484;
+    --accent: #6ea8fe;
+    --accent-2: #8ab4ff;
+    --green: #4fd68a;
+    --amber: #f5b04c;
+    --red: #f47b8a;
+    --radius: 10px;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+
+  .app { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+
+  /* 顶栏 */
+  header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 18px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  header .logo { font-size: 16px; font-weight: 700; letter-spacing: .2px; }
+  header .logo .sub { color: var(--text-faint); font-weight: 500; margin-left: 8px; font-size: 12px; }
+  header .spacer { flex: 1; }
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 5px 12px; border-radius: 999px; font-size: 12.5px;
+    border: 1px solid var(--border); background: var(--panel-2); color: var(--text-dim);
+    white-space: nowrap;
+  }
+  .status-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
+  .status-pill.up .dot { background: var(--green); box-shadow: 0 0 0 3px rgba(79, 214, 138, .18); }
+  .status-pill.up { color: var(--green); border-color: rgba(79, 214, 138, .35); }
+  .status-pill.down .dot { background: var(--red); }
+  .status-pill.down { color: var(--red); border-color: rgba(244, 123, 138, .35); }
+
+  .btn {
+    appearance: none; border: 1px solid var(--border-strong); background: var(--panel-2);
+    color: var(--text); padding: 7px 14px; border-radius: 8px; cursor: pointer;
+    font: inherit; font-size: 13px; transition: all .12s ease; text-decoration: none;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #0b1020; font-weight: 600; }
+  .btn.primary:hover { background: var(--accent-2); border-color: var(--accent-2); }
+  .btn.danger { color: var(--red); border-color: rgba(244, 123, 138, .4); }
+  .btn.danger:hover { background: rgba(244, 123, 138, .12); border-color: var(--red); }
+  .btn.restart { background: var(--green); border-color: var(--green); color: #07170f; font-weight: 600; }
+  .btn.restart:hover { filter: brightness(1.08); }
+  .btn.sm { padding: 4px 10px; font-size: 12px; }
+  .btn.icon { padding: 4px 8px; font-size: 13px; line-height: 1; }
+
+  /* 主体两栏 */
+  .main { display: grid; grid-template-columns: 230px 1fr; min-height: 0; }
+
+  /* 侧栏 profile */
+  aside {
+    border-right: 1px solid var(--border); padding: 14px 10px; overflow-y: auto;
+    background: var(--panel);
+  }
+  aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--text-faint); margin: 4px 8px 10px; }
+  .profile-item {
+    display: flex; align-items: center; gap: 8px; padding: 9px 11px; border-radius: 8px;
+    cursor: pointer; color: var(--text-dim); margin-bottom: 4px; border: 1px solid transparent;
+  }
+  .profile-item:hover { background: var(--panel-2); color: var(--text); }
+  .profile-item.active { background: var(--panel-2); color: var(--text); border-color: var(--border-strong); }
+  .profile-item .badge-count { margin-left: auto; font-size: 11px; color: var(--text-faint); }
+
+  /* 内容区 */
+  .content { overflow-y: auto; padding: 20px 24px; min-width: 0; }
+  .content h1 { font-size: 19px; margin: 0 0 4px; }
+  .content .path { font-family: var(--mono); font-size: 12px; color: var(--text-faint); margin-bottom: 20px; word-break: break-all; }
+
+  .section { margin-bottom: 26px; }
+  .section-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  .section-head h2 { font-size: 15px; margin: 0; }
+  .section-head .hint { color: var(--text-faint); font-size: 12px; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 13px 15px; margin-bottom: 9px; display: flex; align-items: center; gap: 10px;
+  }
+  .card.disabled { opacity: .55; }
+  .card .grow { flex: 1; min-width: 0; }
+  .card .name { font-family: var(--mono); font-size: 13px; word-break: break-all; }
+  .card .meta { font-family: var(--mono); font-size: 11.5px; color: var(--text-faint); margin-top: 3px; word-break: break-all; }
+
+  .badge {
+    display: inline-block; padding: 1.5px 8px; border-radius: 5px; font-size: 11px;
+    border: 1px solid var(--border); color: var(--text-dim); white-space: nowrap;
+  }
+  .badge.builtin { color: var(--text-dim); }
+  .badge.user { color: var(--accent-2); border-color: rgba(138, 180, 255, .35); }
+  .badge.patch { color: var(--amber); border-color: rgba(245, 176, 76, .35); }
+  .badge.plain { color: var(--text-faint); }
+  .badge.version { color: var(--text-dim); }
+  .badge.off { color: var(--red); border-color: rgba(244, 123, 138, .4); }
+
+  .empty {
+    border: 1px dashed var(--border-strong); border-radius: var(--radius); padding: 26px;
+    text-align: center; color: var(--text-faint); font-size: 13px;
+  }
+
+  /* 添加表单 */
+  .add-row { display: flex; gap: 10px; margin-bottom: 6px; }
+  .add-row input {
+    flex: 1; background: var(--panel-2); border: 1px solid var(--border-strong); border-radius: 8px;
+    color: var(--text); padding: 9px 12px; font-family: var(--mono); font-size: 13px;
+  }
+  .add-row input:focus { outline: none; border-color: var(--accent); }
+  .add-hint { font-size: 12px; color: var(--text-faint); }
+
+  /* 排序控件 */
+  .order-group { display: flex; gap: 4px; }
+
+  /* 操作日志 */
+  .log {
+    background: #0a0d12; border: 1px solid var(--border); border-radius: var(--radius);
+    font-family: var(--mono); font-size: 12px; padding: 12px 14px; height: 200px;
+    overflow-y: auto; white-space: pre-wrap; word-break: break-all; margin-top: 12px;
+  }
+  .log .line { margin-bottom: 1px; }
+  .log .line.info { color: var(--text-dim); }
+  .log .line.ok { color: var(--green); }
+  .log .line.stderr, .log .line.error { color: var(--red); }
+  .log .line.stdout { color: var(--text); }
+  .log .empty-log { color: var(--text-faint); }
+
+  .spinner {
+    display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(255,255,255,.2);
+    border-top-color: currentColor; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -2px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  @media (max-width: 760px) {
+    .main { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+    aside { display: flex; overflow-x: auto; border-right: none; border-bottom: 1px solid var(--border); }
+    aside h2 { display: none; }
+    .profile-item { white-space: nowrap; }
+    header { flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo">DSH 插件管理器<span class="sub">Plugin Manager</span></div>
+    <div class="spacer"></div>
+    <a class="btn" id="open-btn" target="_blank" rel="noopener">打开 DSH</a>
+    <div class="status-pill" id="status-pill"><span class="dot"></span><span id="status-text">检测中…</span></div>
+    <button class="btn danger" id="stop-btn" disabled>停止 DSH</button>
+    <button class="btn restart" id="restart-btn" disabled>重启 DSH</button>
+  </header>
+
+  <div class="main">
+    <aside>
+      <h2>Profiles</h2>
+      <div id="profile-list"></div>
+    </aside>
+
+    <div class="content">
+      <div id="content-root"></div>
+
+      <div class="section">
+        <div class="section-head">
+          <h2>操作日志</h2>
+          <span class="hint">增删插件 / 排序 / 禁用 / 重启 / 停止 的实时输出</span>
+        </div>
+        <div class="log" id="log"><div class="empty-log">还没有操作。使用上方表单添加插件，或点击右上角「重启 DSH」。</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const $ = (sel) => document.querySelector(sel);
+const logEl = $("#log");
+const state = { current: null, profiles: [], busy: false };
+
+// ── 日志 ────────────────────────────────────────────────────────────────────
+function logLine(type, text) {
+  if (logEl.querySelector(".empty-log")) logEl.innerHTML = "";
+  const div = document.createElement("div");
+  div.className = "line " + type;
+  div.textContent = text;
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function clearLog() { logEl.innerHTML = '<div class="empty-log">还没有操作。</div>'; }
+
+// ── 状态加载 ────────────────────────────────────────────────────────────────
+async function loadState() {
+  try {
+    const resp = await fetch("/api/state");
+    const data = await resp.json();
+    if (!data.ok) throw new Error(data.error || "加载失败");
+    state.profiles = data.profiles;
+    renderStatus(data.dsh);
+    renderProfiles();
+    renderContent();
+  } catch (err) {
+    renderStatusError(err.message);
+  }
+}
+
+function renderStatus(dsh) {
+  const pill = $("#status-pill");
+  const text = $("#status-text");
+  const btn = $("#restart-btn");
+  const stop = $("#stop-btn");
+  const open = $("#open-btn");
+  open.href = dsh.webUrl || "http://127.0.0.1:3080";
+  open.title = "打开 " + open.href;
+  if (dsh.running) {
+    pill.className = "status-pill up";
+    const pids = dsh.processes.map((p) => p.pid).join(", ");
+    text.textContent = `运行中 · PID ${pids}`;
+    btn.textContent = "重启 DSH";
+  } else {
+    pill.className = "status-pill down";
+    text.textContent = "未运行";
+    btn.textContent = "启动 DSH";
+  }
+  btn.disabled = state.busy;
+  stop.disabled = state.busy || !dsh.running;
+}
+
+function renderStatusError(msg) {
+  const pill = $("#status-pill");
+  pill.className = "status-pill down";
+  $("#status-text").textContent = "加载失败";
+  $("#restart-btn").textContent = "重启 DSH";
+  $("#restart-btn").disabled = true;
+  $("#stop-btn").disabled = true;
+  console.error(msg);
+}
+
+// ── 渲染 ────────────────────────────────────────────────────────────────────
+function renderProfiles() {
+  const list = $("#profile-list");
+  list.innerHTML = "";
+  if (state.profiles.length === 0) {
+    list.innerHTML = '<div class="empty" style="padding:14px">暂无 profile</div>';
+    return;
+  }
+  if (!state.current || !state.profiles.some((p) => p.name === state.current)) {
+    state.current = state.profiles[0].name;
+  }
+  for (const profile of state.profiles) {
+    const item = document.createElement("div");
+    item.className = "profile-item" + (profile.name === state.current ? " active" : "");
+    const total = (profile.bundles?.length || 0) + (profile.dependencies?.length || 0);
+    item.innerHTML =
+      '<span>' + escapeHtml(profile.name) + '</span>' +
+      '<span class="badge-count">' + total + '</span>';
+    item.onclick = () => { state.current = profile.name; renderProfiles(); renderContent(); };
+    list.appendChild(item);
+  }
+}
+
+function renderContent() {
+  const root = $("#content-root");
+  if (!state.profiles.length) {
+    root.innerHTML =
+      '<div class="empty" style="margin-bottom:26px">' +
+      '<strong>没有找到任何 profile。</strong><br>' +
+      '请先通过 <code>dsh plugin --profile &lt;name&gt; add &lt;pkg&gt;</code> 初始化一个 profile，或确保 DSH_HOME 指向正确目录。' +
+      '</div>';
+    return;
+  }
+  const profile = state.profiles.find((p) => p.name === state.current);
+  if (!profile) return;
+
+  if (profile.missing) {
+    root.innerHTML =
+      '<h1>' + escapeHtml(profile.name) + '</h1>' +
+      '<div class="path">' + escapeHtml(profile.dir) + '</div>' +
+      '<div class="empty">该目录尚未初始化（缺少 package.json）。</div>';
+    return;
+  }
+
+  const bundlesHtml = (profile.bundles || []).map((b, i) => bundleCard(b, i, profile.bundles.length)).join("") || emptyBox("暂无 bundle 层");
+  const depsHtml = (profile.dependencies || []).map(depCard).join("") || emptyBox("暂无已安装依赖");
+
+  root.innerHTML =
+    '<h1>' + escapeHtml(profile.name) + '</h1>' +
+    '<div class="path">' + escapeHtml(profile.dir) + '</div>' +
+
+    '<div class="section">' +
+      '<div class="section-head"><h2>添加插件</h2><span class="hint">等价于 dsh plugin --profile ' + escapeHtml(profile.name) + ' add &lt;spec&gt;</span></div>' +
+      '<div class="add-row">' +
+        '<input id="add-input" type="text" placeholder="例如：some-plugin 或 @scope/pkg@1.2.3 或 link:/绝对路径/插件" />' +
+        '<button class="btn primary" id="add-btn">安装</button>' +
+      '</div>' +
+      '<div class="add-hint">registry 包名 / 版本 / <code>file:</code> 与 <code>link:</code> 本地路径 / git URL 均可。本地路径请用绝对路径。</div>' +
+    '</div>' +
+
+    '<div class="section">' +
+      '<div class="section-head"><h2>Bundle 层</h2><span class="hint">生效的插件层（按顺序，越靠前越先应用）</span></div>' +
+      bundlesHtml +
+    '</div>' +
+
+    '<div class="section">' +
+      '<div class="section-head"><h2>已安装依赖</h2><span class="hint">node_modules 中的插件与普通依赖；可临时禁用/启用</span></div>' +
+      depsHtml +
+    '</div>';
+
+  $("#add-btn").onclick = () => doAdd();
+  $("#add-input").addEventListener("keydown", (e) => { if (e.key === "Enter") doAdd(); });
+
+  document.querySelectorAll("[data-remove]").forEach((btn) => {
+    btn.onclick = () => doRemove(btn.dataset.remove);
+  });
+  document.querySelectorAll("[data-toggle-disable]").forEach((btn) => {
+    btn.onclick = () => doToggleDisable(btn.dataset.toggleDisable, btn.dataset.disabled === "1");
+  });
+  document.querySelectorAll("[data-move]").forEach((btn) => {
+    btn.onclick = () => doMove(Number(btn.dataset.move), Number(btn.dataset.delta));
+  });
+}
+
+function bundleCard(b, index, total) {
+  const badge = b.kind === "bundle-builtin"
+    ? '<span class="badge builtin">内置</span>'
+    : '<span class="badge user">用户安装</span>';
+  const version = b.version ? '<span class="badge version">v' + escapeHtml(b.version) + '</span>' : "";
+  const spec = b.spec ? '<div class="meta">' + escapeHtml(b.spec) + '</div>' : "";
+  const up = '<button class="btn icon" data-move="' + index + '" data-delta="-1" title="上移" ' + (index === 0 ? "disabled" : "") + '>↑</button>';
+  const down = '<button class="btn icon" data-move="' + index + '" data-delta="1" title="下移" ' + (index === total - 1 ? "disabled" : "") + '>↓</button>';
+  return '<div class="card">' +
+    '<div class="order-group">' + up + down + '</div>' +
+    '<div class="grow"><div class="name">' + escapeHtml(b.name) + '</div>' + spec + '</div>' +
+    version + badge +
+    '</div>';
+}
+
+function depCard(d) {
+  const isBundle = d.kind === "bundle-dependency";
+  const badges = [];
+  if (isBundle) badges.push('<span class="badge user">也在 bundle 层</span>');
+  if (d.referencedInPatch) badges.push('<span class="badge patch">patch 引用</span>');
+  if (!isBundle && !d.referencedInPatch) badges.push('<span class="badge plain">纯依赖</span>');
+  if (d.version) badges.push('<span class="badge version">v' + escapeHtml(d.version) + '</span>');
+  if (d.disabled) badges.push('<span class="badge off">已禁用</span>');
+  if (d.entryIds && d.entryIds.length) badges.push('<span class="badge">条目 ' + d.entryIds.map(escapeHtml).join(", ") + '</span>');
+
+  const meta = d.spec ? '<div class="meta">' + escapeHtml(d.spec) + '</div>' : "";
+  let toggleBtn = "";
+  if (d.entryIds && d.entryIds.length) {
+    toggleBtn = d.disabled
+      ? '<button class="btn sm" data-toggle-disable="' + escapeHtml(d.name) + '" data-disabled="1">启用</button>'
+      : '<button class="btn sm danger" data-toggle-disable="' + escapeHtml(d.name) + '" data-disabled="0">禁用</button>';
+  }
+  return '<div class="card' + (d.disabled ? " disabled" : "") + '">' +
+    '<div class="grow"><div class="name">' + escapeHtml(d.name) + '</div>' + meta + '</div>' +
+    badges.join(" ") +
+    toggleBtn +
+    '<button class="btn sm danger" data-remove="' + escapeHtml(d.name) + '">移除</button>' +
+    '</div>';
+}
+
+function emptyBox(text) {
+  return '<div class="empty">' + text + '</div>';
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+// ── 操作 ────────────────────────────────────────────────────────────────────
+function setBusy(busy) {
+  state.busy = busy;
+  const pill = $("#status-pill");
+  const running = pill.classList.contains("up");
+  $("#restart-btn").disabled = busy;
+  $("#stop-btn").disabled = busy || !running;
+  const addBtn = $("#add-btn");
+  if (addBtn) addBtn.disabled = busy;
+}
+
+async function streamRequest(url, body) {
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    logLine("error", "HTTP " + resp.status);
+    return;
+  }
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 1);
+      if (!line) continue;
+      try {
+        const msg = JSON.parse(line);
+        handleStreamMessage(msg);
+      } catch { /* 忽略非 JSON 行 */ }
+    }
+  }
+}
+
+function handleStreamMessage(msg) {
+  const type = msg.type;
+  if (type === "exit") {
+    if (msg.data === 0 || msg.data === "0") logLine("ok", "操作完成。");
+    else logLine("error", "操作失败，退出码 " + msg.data);
+  } else {
+    logLine(type, msg.data);
+  }
+}
+
+/** 执行一个返回 JSON 的快速操作；成功时 resolve 响应数据，失败 resolve null。 */
+async function jsonOp(url, body, successText) {
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) {
+      logLine("error", (data.error || "操作失败") + "（HTTP " + resp.status + "）");
+      return null;
+    }
+    if (successText) logLine("ok", successText);
+    return data;
+  } catch (err) {
+    logLine("error", err.message);
+    return null;
+  }
+}
+
+async function doAdd() {
+  const input = $("#add-input");
+  const spec = input.value.trim();
+  if (!spec) return;
+  clearLog();
+  logLine("info", "安装 " + spec + " 到 profile " + state.current + " …");
+  setBusy(true);
+  try {
+    await streamRequest("/api/plugins", { action: "add", profile: state.current, spec });
+  } catch (err) {
+    logLine("error", err.message);
+  } finally {
+    setBusy(false);
+    await loadState();
+  }
+}
+
+async function doRemove(name) {
+  if (!confirm("确认从 profile " + state.current + " 移除插件 " + name + " ？")) return;
+  clearLog();
+  logLine("info", "移除 " + name + " …");
+  setBusy(true);
+  try {
+    await streamRequest("/api/plugins", { action: "remove", profile: state.current, spec: name });
+  } catch (err) {
+    logLine("error", err.message);
+  } finally {
+    setBusy(false);
+    await loadState();
+  }
+}
+
+async function doMove(index, delta) {
+  const profile = state.profiles.find((p) => p.name === state.current);
+  if (!profile) return;
+  const target = index + delta;
+  if (target < 0 || target >= profile.bundles.length) return;
+  const names = profile.bundles.map((b) => b.name);
+  const [moved] = names.splice(index, 1);
+  names.splice(target, 0, moved);
+  clearLog();
+  setBusy(true);
+  const ok = await jsonOp("/api/reorder", { profile: state.current, names },
+    "已调整顺序：" + names.join(" → "));
+  setBusy(false);
+  if (ok) await loadState();
+}
+
+async function doToggleDisable(name, currentlyDisabled) {
+  const action = currentlyDisabled ? "enable" : "disable";
+  clearLog();
+  logLine("info", (currentlyDisabled ? "启用 " : "禁用 ") + name + " …");
+  setBusy(true);
+  const data = await jsonOp("/api/" + action, { profile: state.current, name });
+  setBusy(false);
+  if (data) {
+    if (action === "disable") logLine("ok", "已临时禁用 " + name + "（条目 id：" + (data.ids || []).join(", ") + "）");
+    else logLine("ok", "已重新启用 " + name);
+    await loadState();
+  }
+}
+
+async function doRestart() {
+  clearLog();
+  logLine("info", "开始重启 dsh web …");
+  setBusy(true);
+  try {
+    await streamRequest("/api/restart", {});
+  } catch (err) {
+    logLine("error", err.message);
+  } finally {
+    setBusy(false);
+    await waitDshBack();
+  }
+}
+
+async function doStop() {
+  if (!confirm("确认停止 dsh web 进程？之后可通过「启动 DSH」重新拉起。")) return;
+  clearLog();
+  logLine("info", "开始停止 dsh web …");
+  setBusy(true);
+  try {
+    await streamRequest("/api/stop", {});
+  } catch (err) {
+    logLine("error", err.message);
+  } finally {
+    setBusy(false);
+    await loadState();
+  }
+}
+
+/** 重启后轮询等待 DSH 恢复。 */
+async function waitDshBack() {
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    await loadState();
+    const pill = $("#status-pill");
+    if (pill.classList.contains("up")) { logLine("ok", "dsh web 已恢复运行。"); return; }
+  }
+  logLine("info", "等待超时，请手动检查 DSH 是否已恢复。");
+}
+
+// ── 启动 ────────────────────────────────────────────────────────────────────
+$("#restart-btn").onclick = doRestart;
+$("#stop-btn").onclick = doStop;
+loadState();
+setInterval(loadState, 3000);
+</script>
+</body>
+</html>

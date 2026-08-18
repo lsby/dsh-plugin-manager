@@ -1,0 +1,10 @@
+{
+  "name": "dsh-plugin-manager",
+  "version": "1.0.0",
+  "description": "图形化管理 DSH 插件 + 一键重启 dsh web 的独立网页应用",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  }
+}
