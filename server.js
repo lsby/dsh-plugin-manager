@@ -64,6 +64,10 @@ function isAlive(pid) {
 
 function safeKill(pid, signal) {
   try {
+    if (process.platform === "win32") {
+      spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { stdio: "ignore" });
+      return true;
+    }
     process.kill(pid, signal);
     return true;
   } catch {
@@ -74,8 +78,24 @@ function safeKill(pid, signal) {
 /** 探测 dsh 可执行文件：环境变量 > PATH 上的 `dsh` > 兜底字符串。 */
 function detectDshBin() {
   if (process.env.DSH_BIN) return process.env.DSH_BIN;
-  const which = spawnSync("which", ["dsh"], { encoding: "utf8" });
-  if (which.status === 0 && which.stdout.trim()) return which.stdout.trim();
+  const tool = process.platform === "win32" ? "where" : "which";
+  try {
+    const which = spawnSync(tool, ["dsh"], { encoding: "utf8" });
+    if (which.status === 0 && which.stdout.trim()) {
+      const lines = which.stdout
+        .trim()
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+      if (process.platform === "win32") {
+        const cmdLine = lines.find((l) => /\.(cmd|exe|bat)$/i.test(l));
+        if (cmdLine) return cmdLine;
+      }
+      if (lines[0]) return lines[0];
+    }
+  } catch {
+    /* 忽略 */
+  }
   return "dsh";
 }
 const DSH_BIN = detectDshBin();
@@ -91,24 +111,66 @@ function atomicWrite(file, content) {
 // DSH 进程发现
 // ────────────────────────────────────────────────────────────────────────────
 
-const DSH_WEB_RE = /\b(?:dsh|bin\.js)\s+(?:web|--profile\s+web)\b/;
+const DSH_WEB_RE = /\b(?:dsh(?:\.(?:cmd|exe|bat|ps1))?|bin\.js)["']?\s+(?:web|--profile\s+web)\b/i;
+
+let procCache = { at: 0, list: [] };
+const PROC_CACHE_TTL_MS = 1500;
 
 /**
  * 找出运行中的 `dsh web` 进程（含 PID、完整命令行、工作目录）。
  * @returns {Array<{pid:number, command:string, cwd:string}>}
  */
-function findDshWeb() {
-  const result = spawnSync("ps", ["-A", "-o", "pid=,command="], { encoding: "utf8" });
-  if (result.status !== 0 || !result.stdout) return [];
-  const found = [];
-  for (const line of result.stdout.split("\n")) {
-    const match = /^\s*(\d+)\s+(.*)$/.exec(line);
-    if (!match) continue;
-    const pid = Number(match[1]);
-    const command = match[2];
-    if (pid === process.pid) continue;
-    if (DSH_WEB_RE.test(command)) found.push({ pid, command, cwd: readCwd(pid) });
+function findDshWeb(force = false) {
+  const now = Date.now();
+  if (!force && now - procCache.at < PROC_CACHE_TTL_MS) {
+    return procCache.list;
   }
+
+  let found = [];
+  if (process.platform === "win32") {
+    try {
+      const psScript = `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.CommandLine -match "dsh" -or $_.CommandLine -match "bin\\.js") } | Select-Object ProcessId, CommandLine | ConvertTo-Json -Compress`;
+      const encoded = Buffer.from(psScript, "utf16le").toString("base64");
+      const result = spawnSync("powershell.exe", ["-NoProfile", "-EncodedCommand", encoded], {
+        encoding: "utf8",
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: 5000,
+      });
+      if (result.status === 0 && result.stdout.trim()) {
+        const parsed = JSON.parse(result.stdout.trim());
+        const list = Array.isArray(parsed) ? parsed : [parsed];
+        for (const item of list) {
+          if (!item || !item.ProcessId || !item.CommandLine) continue;
+          const pid = Number(item.ProcessId);
+          const command = item.CommandLine;
+          if (pid === process.pid) continue;
+          if (DSH_WEB_RE.test(command)) {
+            found.push({ pid, command, cwd: process.cwd() });
+          }
+        }
+      }
+    } catch {
+      /* 忽略 */
+    }
+  } else {
+    try {
+      const result = spawnSync("ps", ["-A", "-o", "pid=,command="], { encoding: "utf8" });
+      if (result.status === 0 && result.stdout) {
+        for (const line of result.stdout.split("\n")) {
+          const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+          if (!match) continue;
+          const pid = Number(match[1]);
+          const command = match[2];
+          if (pid === process.pid) continue;
+          if (DSH_WEB_RE.test(command)) found.push({ pid, command, cwd: readCwd(pid) });
+        }
+      }
+    } catch {
+      /* 忽略 */
+    }
+  }
+
+  procCache = { at: now, list: found };
   return found;
 }
 
@@ -173,6 +235,7 @@ function entryIdsByName(profile, dir, patchContent) {
       encoding: "utf8",
       env: { ...process.env, DSH_HOME },
       timeout: 15000,
+      shell: process.platform === "win32",
     });
     if (result.status === 0 && result.stdout) {
       for (const pair of extractIdNamePairs(result.stdout)) add(pair.id, pair.name);
@@ -361,7 +424,8 @@ async function waitForExit(pids, timeoutMs) {
 
 /** 终止全部 dsh web 进程，等待退出，必要时 SIGKILL。返回是否曾终止。 */
 async function stopDshProcesses(send) {
-  const processes = findDshWeb();
+  procCache.at = 0;
+  const processes = findDshWeb(true);
   if (processes.length === 0) {
     send?.("info", "dsh web 未在运行。");
     return false;
@@ -445,6 +509,7 @@ async function handlePluginOp(req, res) {
       cwd: process.cwd(),
       env: { ...process.env, DSH_HOME },
       stdio: ["ignore", "pipe", "pipe"],
+      shell: process.platform === "win32",
     });
   } catch (error) {
     send("error", `无法启动 ${DSH_BIN}：${error.message}`);
@@ -568,20 +633,34 @@ const MIME = {
   ".png": "image/png",
 };
 
+/** 内嵌 HTML（在 SEA 打包时由构建脚本注入，支持单二进制独立运行）。若本地有 public/index.html 则优先读本地。 */
+const EMBEDDED_INDEX_HTML = typeof __EMBEDDED_INDEX_HTML__ !== "undefined" ? __EMBEDDED_INDEX_HTML__ : "";
+
 function serveStatic(res, pathname) {
   const safe = pathname === "/" ? "/index.html" : pathname;
   const file = join(PUBLIC_DIR, safe);
-  if (!file.startsWith(PUBLIC_DIR) || !existsSync(file)) {
-    res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-    return res.end("404 Not Found");
+  if (file.startsWith(PUBLIC_DIR) && existsSync(file)) {
+    const body = readFileSync(file);
+    const ext = file.slice(file.lastIndexOf(".")).toLowerCase();
+    res.writeHead(200, {
+      "Content-Type": MIME[ext] || "application/octet-stream",
+      "Content-Length": body.length,
+    });
+    return res.end(body);
   }
-  const body = readFileSync(file);
-  const ext = file.slice(file.lastIndexOf(".")).toLowerCase();
-  res.writeHead(200, {
-    "Content-Type": MIME[ext] || "application/octet-stream",
-    "Content-Length": body.length,
-  });
-  res.end(body);
+
+  // 兜底：如果是访问根路径或 index.html，且存在内嵌 HTML（SEA 单文件运行时）
+  if ((safe === "/index.html" || safe === "/") && typeof EMBEDDED_INDEX_HTML === "string" && EMBEDDED_INDEX_HTML.length > 0) {
+    const buf = Buffer.from(EMBEDDED_INDEX_HTML, "utf8");
+    res.writeHead(200, {
+      "Content-Type": MIME[".html"],
+      "Content-Length": buf.length,
+    });
+    return res.end(buf);
+  }
+
+  res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end("404 Not Found");
 }
 
 // ────────────────────────────────────────────────────────────────────────────
